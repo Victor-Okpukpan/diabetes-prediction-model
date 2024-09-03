@@ -1,118 +1,186 @@
-import Image from "next/image";
-import { Inter } from "next/font/google";
-
-const inter = Inter({ subsets: ["latin"] });
+import { useState } from 'react';
+import * as tf from '@tensorflow/tfjs';
+import Papa from 'papaparse';
 
 export default function Home() {
-  return (
-    <main
-      className={`flex min-h-screen flex-col items-center justify-between p-24 ${inter.className}`}
-    >
-      <div className="z-10 max-w-5xl w-full items-center justify-between font-mono text-sm lg:flex">
-        <p className="fixed left-0 top-0 flex w-full justify-center border-b border-gray-300 bg-gradient-to-b from-zinc-200 pb-6 pt-8 backdrop-blur-2xl dark:border-neutral-800 dark:bg-zinc-800/30 dark:from-inherit lg:static lg:w-auto lg:rounded-xl lg:border lg:bg-gray-200 lg:p-4 lg:dark:bg-zinc-800/30">
-          Get started by editing&nbsp;
-          <code className="font-mono font-bold">src/pages/index.js</code>
-        </p>
-        <div className="fixed bottom-0 left-0 flex h-48 w-full items-end justify-center bg-gradient-to-t from-white via-white dark:from-black dark:via-black lg:static lg:h-auto lg:w-auto lg:bg-none">
-          <a
-            className="pointer-events-none flex place-items-center gap-2 p-8 lg:pointer-events-auto lg:p-0"
-            href="https://vercel.com?utm_source=create-next-app&utm_medium=default-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            By{" "}
-            <Image
-              src="/vercel.svg"
-              alt="Vercel Logo"
-              className="dark:invert"
-              width={100}
-              height={24}
-              priority
-            />
-          </a>
+    const [model, setModel] = useState(null);
+    const [accuracy, setAccuracy] = useState(null);
+    const [inputData, setInputData] = useState({
+        pregnancies: 0,
+        glucose: 0,
+        bloodPressure: 0,
+        skinThickness: 0,
+        insulin: 0,
+        bmi: 0,
+        diabetesPedigreeFunction: 0,
+        age: 0,
+    });
+    const [prediction, setPrediction] = useState(null);
+    const [isTraining, setIsTraining] = useState(false);
+    const [isPredicting, setIsPredicting] = useState(false);
+    const [showModal, setShowModal] = useState(false);
+
+    const loadCSV = async () => {
+        console.log('Loading CSV data...');
+        const response = await fetch('/diabetes.csv');
+        const csvData = await response.text();
+        return new Promise((resolve) => {
+            Papa.parse(csvData, {
+                header: true,
+                dynamicTyping: true,
+                complete: (results) => {
+                    console.log('CSV data loaded successfully.');
+                    resolve(results.data);
+                },
+            });
+        });
+    };
+
+    const preprocessData = (data) => {
+        console.log('Preprocessing data...');
+        const inputs = data.map((row) => [
+            row.Pregnancies, row.Glucose, row.BloodPressure,
+            row.SkinThickness, row.Insulin, row.BMI,
+            row.DiabetesPedigreeFunction, row.Age,
+        ]);
+
+        const labels = data.map((row) => row.Outcome);
+
+        const inputTensor = tf.tensor2d(inputs);
+        const labelTensor = tf.tensor2d(labels, [labels.length, 1]);
+
+        console.log('Data preprocessed successfully.');
+        return { inputTensor, labelTensor };
+    };
+
+    const trainModel = async () => {
+        setIsTraining(true);
+        console.log('Starting model training...');
+        const data = await loadCSV();
+        const { inputTensor, labelTensor } = preprocessData(data);
+
+        const model = tf.sequential();
+        model.add(tf.layers.dense({ units: 8, inputShape: [8], activation: 'relu' }));
+        model.add(tf.layers.dense({ units: 1, activation: 'sigmoid' }));
+
+        model.compile({
+            optimizer: tf.train.adam(),
+            loss: 'binaryCrossentropy',
+            metrics: ['accuracy'],
+        });
+
+        console.log('Model structure created. Starting training...');
+        const history = await model.fit(inputTensor, labelTensor, {
+            epochs: 100,
+            validationSplit: 0.2,
+            shuffle: true,
+            callbacks: {
+                onEpochEnd: (epoch, logs) => {
+                    console.log(`Epoch ${epoch + 1}: accuracy = ${logs.acc}`);
+                },
+            },
+        });
+
+        setAccuracy(history.history.acc.pop());
+        setModel(model);
+        setIsTraining(false);
+
+        console.log('Model training completed.');
+        inputTensor.dispose();
+        labelTensor.dispose();
+    };
+
+    const handleChange = (e) => {
+        setInputData({
+            ...inputData,
+            [e.target.name]: parseFloat(e.target.value)
+        });
+    };
+
+    const handleSubmit = async (e) => {
+        e.preventDefault();
+        if (!model) {
+            alert('Please train the model first!');
+            return;
+        }
+        setIsPredicting(true);
+        console.log('Starting prediction...');
+        const inputTensor = tf.tensor2d([Object.values(inputData)]);
+        const output = model.predict(inputTensor);
+        const result = await output.data();
+        console.log('Prediction completed.');
+        console.log(`Prediction result: ${result[0]}`);
+        setPrediction(result[0] >= 0.5 ? 'Positive' : 'Negative');
+        setShowModal(true); // Show the modal with the prediction result
+        setIsPredicting(false);
+    };
+
+    return (
+        <div className="flex flex-col text-black items-center justify-center min-h-screen bg-gray-100 p-4">
+            <h1 className="text-2xl font-bold mb-4">Diabetes Prediction System</h1>
+            <button 
+                onClick={trainModel} 
+                className={`bg-blue-500 text-white px-4 py-2 rounded mb-4 ${isTraining ? 'opacity-50 cursor-not-allowed' : ''}`}
+                disabled={isTraining}
+            >
+                {isTraining ? 'Training Model...' : 'Train Model'}
+            </button>
+            {accuracy && !isTraining && (
+                <h2 className="text-lg font-medium text-green-500 mb-4">
+                    Model Accuracy: {(accuracy * 100).toFixed(2)}%
+                </h2>
+            )}
+            {!accuracy && !isTraining && (
+                <div className="text-red-500 mb-4">
+                    Train the model before you begin
+                </div>
+            )}
+            {isTraining && (
+                <div className="text-blue-500 mb-4">Training in progress... Please wait.</div>
+            )}
+            <form onSubmit={handleSubmit} className="bg-white p-6 rounded shadow-md w-full max-w-md">
+                <h2 className="text-xl font-semibold mb-4">Input Data</h2>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    {Object.keys(inputData).map(key => (
+                        <div key={key}>
+                            <label className="block text-sm font-medium text-gray-700">{key}</label>
+                            <input 
+                                type="number" 
+                                name={key} 
+                                value={inputData[key]} 
+                                onChange={handleChange}
+                                className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                            />
+                        </div>
+                    ))}
+                </div>
+                <button 
+                    type="submit" 
+                    className={`bg-green-500 text-white px-4 py-2 rounded mt-4 w-full ${isPredicting ? 'opacity-50 cursor-not-allowed' : ''}`}
+                    disabled={isPredicting}
+                >
+                    {isPredicting ? 'Predicting...' : 'Predict'}
+                </button>
+            </form>
+            {isPredicting && (
+                <div className="text-blue-500 mt-4">Calculating prediction... Please wait.</div>
+            )}
+
+            {/* Modal for showing the prediction */}
+            {showModal && (
+                <div className="fixed inset-0 bg-gray-800 bg-opacity-75 flex items-center justify-center">
+                    <div className="bg-white mx-10 p-6 rounded shadow-lg max-w-sm w-full text-center">
+                        <h2 className="text-2xl font-semibold mb-4">Prediction Result</h2>
+                        <p className="text-lg mb-4">The model predicts: <span className="text-blue-500 font-bold">{prediction}</span></p>
+                        <button 
+                            onClick={() => setShowModal(false)} 
+                            className="bg-red-500 text-white px-4 py-2 rounded"
+                        >
+                            Close
+                        </button>
+                    </div>
+                </div>
+            )}
         </div>
-      </div>
-
-      <div className="relative flex place-items-center before:absolute before:h-[300px] before:w-full sm:before:w-[480px] before:-translate-x-1/2 before:rounded-full before:bg-gradient-radial before:from-white before:to-transparent before:blur-2xl before:content-[''] after:absolute after:-z-20 after:h-[180px] after:w-full sm:after:w-[240px] after:translate-x-1/3 after:bg-gradient-conic after:from-sky-200 after:via-blue-200 after:blur-2xl after:content-[''] before:dark:bg-gradient-to-br before:dark:from-transparent before:dark:to-blue-700/10 after:dark:from-sky-900 after:dark:via-[#0141ff]/40 before:lg:h-[360px]">
-        <Image
-          className="relative dark:drop-shadow-[0_0_0.3rem_#ffffff70] dark:invert"
-          src="/next.svg"
-          alt="Next.js Logo"
-          width={180}
-          height={37}
-          priority
-        />
-      </div>
-
-      <div className="mb-32 grid text-center lg:max-w-5xl lg:w-full lg:mb-0 lg:grid-cols-4 lg:text-left">
-        <a
-          href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=default-template-tw&utm_campaign=create-next-app"
-          className="group rounded-lg border border-transparent px-5 py-4 transition-colors hover:border-gray-300 hover:bg-gray-100 hover:dark:border-neutral-700 hover:dark:bg-neutral-800/30"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <h2 className={`mb-3 text-2xl font-semibold`}>
-            Docs{" "}
-            <span className="inline-block transition-transform group-hover:translate-x-1 motion-reduce:transform-none">
-              -&gt;
-            </span>
-          </h2>
-          <p className={`m-0 max-w-[30ch] text-sm opacity-50`}>
-            Find in-depth information about Next.js features and API.
-          </p>
-        </a>
-
-        <a
-          href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=default-template-tw&utm_campaign=create-next-app"
-          className="group rounded-lg border border-transparent px-5 py-4 transition-colors hover:border-gray-300 hover:bg-gray-100 hover:dark:border-neutral-700 hover:dark:bg-neutral-800/30"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <h2 className={`mb-3 text-2xl font-semibold`}>
-            Learn{" "}
-            <span className="inline-block transition-transform group-hover:translate-x-1 motion-reduce:transform-none">
-              -&gt;
-            </span>
-          </h2>
-          <p className={`m-0 max-w-[30ch] text-sm opacity-50`}>
-            Learn about Next.js in an interactive course with&nbsp;quizzes!
-          </p>
-        </a>
-
-        <a
-          href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=default-template-tw&utm_campaign=create-next-app"
-          className="group rounded-lg border border-transparent px-5 py-4 transition-colors hover:border-gray-300 hover:bg-gray-100 hover:dark:border-neutral-700 hover:dark:bg-neutral-800/30"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <h2 className={`mb-3 text-2xl font-semibold`}>
-            Templates{" "}
-            <span className="inline-block transition-transform group-hover:translate-x-1 motion-reduce:transform-none">
-              -&gt;
-            </span>
-          </h2>
-          <p className={`m-0 max-w-[30ch] text-sm opacity-50`}>
-            Discover and deploy boilerplate example Next.js&nbsp;projects.
-          </p>
-        </a>
-
-        <a
-          href="https://vercel.com/new?utm_source=create-next-app&utm_medium=default-template-tw&utm_campaign=create-next-app"
-          className="group rounded-lg border border-transparent px-5 py-4 transition-colors hover:border-gray-300 hover:bg-gray-100 hover:dark:border-neutral-700 hover:dark:bg-neutral-800/30"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <h2 className={`mb-3 text-2xl font-semibold`}>
-            Deploy{" "}
-            <span className="inline-block transition-transform group-hover:translate-x-1 motion-reduce:transform-none">
-              -&gt;
-            </span>
-          </h2>
-          <p className={`m-0 max-w-[30ch] text-sm opacity-50 text-balance`}>
-            Instantly deploy your Next.js site to a shareable URL with Vercel.
-          </p>
-        </a>
-      </div>
-    </main>
-  );
+    );
 }
