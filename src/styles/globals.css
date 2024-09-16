@@ -25,6 +25,25 @@ body {
     )
     rgb(var(--background-start-rgb));
 }
+.chart-container {
+  position: relative;
+  width: 100%;        /* Responsive width */
+  max-width: 100%;    /* Ensures it doesn't overflow */
+  height: auto;       /* Maintain responsive height */
+  min-height: 300px;  /* Minimum height for mobile screens */
+}
+
+@media screen and (min-width: 768px) {
+  .chart-container {
+      height: 50vh;   /* Larger height for tablets and above */
+  }
+}
+
+@media screen and (min-width: 1200px) {
+  .chart-container {
+      height: 500px;  /* For larger screens, fixed height */
+  }
+}
 
 @layer utilities {
   .text-balance {
